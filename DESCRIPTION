@@ -1,0 +1,36 @@
+Package: normpatch
+Type: Package
+Title: Robust Normalization Factor Estimation for RNA-seq Count Data
+Version: 0.0.1
+Authors@R: person(given = "Jianqiang", family = "Sun",
+    email = "sun@bitdessin.dev",
+    role = c("cre", "aut"),
+    comment = c(ORCID = "0000-0002-3438-3199"))
+Description: Implements normalization factor estimation for RNA-seq count data
+    using methods based on the DEGES framework. These methods reduce the
+    influence of differentially expressed features on the estimation of
+    sample specific scaling factors in the presence of compositional imbalance.
+License: MIT + file LICENSE
+URL: https://github.com/bitdessin/normpatch
+BugReports: https://github.com/bitdessin/normpatch/issues
+Depends:
+    R (>= 4.1.0)
+Imports:
+    methods,
+    rlang,
+    stats,
+    ggplot2
+Suggests:
+    SummarizedExperiment,
+    ExpressionAtlas,
+    DESeq2,
+    edgeR,
+    baySeq,
+    TCC,
+    pROC,
+    testthat (>= 3.0.0)
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Config/testthat/edition: 3

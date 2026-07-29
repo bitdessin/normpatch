@@ -1,0 +1,15 @@
+output_dir: "_html"
+before_chapter_script: "_config.R"
+delete_merged_file: false
+
+rmd_files: [
+  "index.Rmd",
+  "installation.Rmd",
+  "quickstart.Rmd",
+  "basic_usage.Rmd",
+  "advanced_usage.Rmd",
+  "simeval.Rmd",
+  "tcc.Rmd",
+  "citations.Rmd",
+  "references.Rmd"
+]

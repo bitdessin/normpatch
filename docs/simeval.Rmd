@@ -1,0 +1,446 @@
+# Simulation Evaluation
+
+This chapter introduces the simulation utilities in `r pkg("normpatch")`.
+The two main functions are `sim_gene_counts()` and `def_DEG()`.
+`sim_gene_counts()` generates artificial RNA-seq count matrices,
+and `def_DEG()` defines the true DEG status from the simulation parameters and a fold change threshold.
+These functions are useful for checking normalization behavior under controlled settings,
+especially when DEGs are intentionally biased toward one group.
+
+The examples in this chapter are intended as practical templates.
+For a formal benchmark, repeat each simulation many times, vary the simulation parameters,
+and summarize performance across simulation replicates rather than relying on one dataset.
+
+
+## Generate simulated data
+
+### Standard usage
+
+The simplest call to `sim_gene_counts()` creates
+a two-group count matrix containing 20,000 genes with three replicates per group.
+The function returns a `SeqCountData` object whose `data` slot contains the count matrix
+and whose `exp_design` slot contains the sample grouping.
+
+```{r sim-std-tgc}
+library(normpatch)
+set.seed(1)
+
+x <- sim_gene_counts()
+x
+```
+
+The simulation parameters are stored in `x@meta$sim_params`.
+They can be inspected through the slots of this object.
+
+
+```{r sim-std-tgc-simparams}
+x@meta$sim_params@n_genes
+x@meta$sim_params@p_DEG
+head(x@meta$sim_params@params)
+head(x@meta$sim_params@fc)
+```
+
+Because the true mean and fold change parameters are known,
+DEG status can be defined directly from the simulated fold change matrix.
+The `def_DEG()` function marks genes as true DEGs when their largest between-group fold change
+is at least the cutoff specified by `fc`.
+`fc` defaults to 2 but can be changed.
+
+```{r sim-std-tgc-degdef}
+is_DEG <- def_DEG(x)
+head(is_DEG)
+```
+
+An MA plot provides a direct view of the simulated counts and the known true DEGs.
+Because `plot_ma()` uses normalized counts, estimate normalization factors before plotting.
+Here, simulated DEGs are highlighted in red and genes that are not DEGs are shown in gray.
+
+```{r sim-std-tgc-viz}
+x <- calc_nf(x)
+
+gene_colors <- ifelse(is_DEG, "#B24745", "#ADADAD")
+plot_ma(x, col = gene_colors)
+```
+
+
+The number of genes and the degree of DEG imbalance can be changed by specifying the corresponding arguments.
+In the following example, the second group contains a larger proportion of biased DEGs,
+and those genes are assigned a stronger fold change.
+
+```{r sim-std-tgc-args}
+set.seed(1)
+
+x <- sim_gene_counts(
+    n_genes = 2000,
+    n_replicates = c(4, 4),
+    p_DEG = c(0.05, 0.15),
+    fc_mean = c(8, 2),
+    group_names = c("control", "stress")
+)
+
+is_DEG <- def_DEG(x, fc = 2)
+
+x <- calc_nf(x)
+
+gene_colors <- ifelse(is_DEG, "#B24745", "#ADADAD")
+plot_ma(x, col = gene_colors)
+```
+
+
+To generate a comparison with three groups, provide one replicate count, DEG proportion,
+and fold change value for each group.
+The example below creates three groups with different proportions of DEGs.
+
+```{r sim-std-mgc}
+set.seed(1)
+
+x <- sim_gene_counts(
+    n_replicates = c(3, 3, 3),
+    p_DEG = c(0.05, 0.10, 0.15),
+    fc_mean = c(4, 4, 4),
+    group_names = c("leaf", "root", "shoot")
+)
+x
+```
+
+
+### Generate counts with randomized fold changes
+
+#### Log-normal fold changes
+
+By default, `sim_gene_counts()` samples fold changes for genes assigned as DEGs from a lognormal distribution.
+This makes the simulated effect sizes heterogeneous,
+which is closer to typical RNA-seq datasets than assigning the same fold change to every DEG.
+
+With randomized fold changes, `fc_mean` is interpreted as the mean fold change for genes assigned as DEGs.
+For this distribution, the `fc_sd` argument controls the spread of the sampled values
+as the standard deviation on the natural log fold change scale.
+
+
+```{r sim-random-fc-lognormal}
+set.seed(1)
+
+x <- sim_gene_counts(
+    fc_dist = "lognormal",
+    fc_mean = c(4, 4),
+    fc_sd = 0.5,
+    group_names = c("control", "stress")
+)
+
+true_fc <- x@meta$sim_params@fc[, "stress"]
+summary(true_fc[true_fc != 1])
+```
+
+The sampled fold-change matrix is stored in `x@meta$sim_params@fc`.
+The `def_DEG()` function uses these fold changes to define the true DEG status.
+Because this classification is based on a fold-change cutoff,
+the resulting number of true DEGs may differ from the proportion specified by the `p_DEG` argument.
+
+
+```{r sim-random-fc-viz}
+is_DEG <- def_DEG(x, fc = 2)
+table(is_DEG)
+
+x <- calc_nf(x, iter = 0)
+
+gene_colors <- ifelse(is_DEG, "#B24745", "#ADADAD")
+plot_ma(x, col = gene_colors) + ggtitle("lognormal")
+```
+
+
+#### Gamma fold changes
+
+The gamma option provides another positive distribution for fold changes.
+Here, the mean fold change is again set by `fc_mean`,
+while `fc_sd` controls the coefficient of variation.
+
+```{r sim-random-fc-gamma}
+set.seed(1)
+
+x <- sim_gene_counts(
+    fc_dist = "gamma",
+    fc_mean = c(4, 4),
+    fc_sd = 0.5,
+    group_names = c("control", "stress")
+)
+
+true_fc <- x@meta$sim_params@fc[, "stress"]
+summary(true_fc[true_fc != 1])
+
+x <- calc_nf(x, iter = 0)
+
+is_DEG <- def_DEG(x, fc = 2)
+gene_colors <- ifelse(is_DEG, "#B24745", "#ADADAD")
+plot_ma(x, col = gene_colors) + ggtitle("gamma")
+```
+
+
+#### Fixed fold changes
+
+Fixed fold changes are still available for controlled simulations.
+Set `fc_dist = "fixed"` when every DEG assigned
+to a group should receive the exact value in `fc_mean`.
+
+```{r sim-fixed-fc}
+set.seed(1)
+
+x <- sim_gene_counts(
+    fc_dist = "fixed",
+    fc_mean = c(4, 4),
+    group_names = c("control", "stress")
+)
+
+true_fc <- x@meta$sim_params@fc[, "stress"]
+unique(true_fc[true_fc != 1])
+
+x <- calc_nf(x, iter = 0)
+
+is_DEG <- def_DEG(x, fc = 2)
+gene_colors <- ifelse(is_DEG, "#B24745", "#ADADAD")
+plot_ma(x, col = gene_colors) + ggtitle("fixed")
+```
+
+## Custom seed matrices
+
+By default, `r pkg("normpatch")` uses the bundled `arab` dataset,
+an *Arabidopsis thaliana* RNA-seq count matrix,
+to construct the population of mean and variance parameters used for simulation.
+
+```{r sim-load-arab}
+data(arab, package = "normpatch")
+head(arab)
+```
+
+The `sim_gene_counts()` function can also use a user-supplied count matrix
+as the seed population for simulation.
+The example below uses the *Arabidopsis* count matrix stored in `docs/data/ath.E-MTAB-4391.txt`
+as the seed matrix.
+
+```{r sim-load-seedmatrix}
+seed_counts <- read.table("data/ath.E-MTAB-4391.txt", header = TRUE, sep = "\t", row.names = 1)
+seed_counts <- as.matrix(seed_counts)
+seed_counts <- rbind(seed_counts[, 1:3], seed_counts[, 4:6])
+seed_counts <- seed_counts[rowSums(seed_counts) > 0, , drop = FALSE]
+head(seed_counts)
+```
+
+The simulated count matrix can then be generated from this seed.
+
+```{r sim-custom-data-generate}
+set.seed(1)
+
+x <- sim_gene_counts(seed_counts = seed_counts, fc_mean = c(2, 2))
+is_DEG <- def_DEG(x, fc = 2)
+
+x <- calc_nf(x)
+
+gene_colors <- ifelse(is_DEG, "#B24745", "#ADADAD")
+plot_ma(x, col = gene_colors)
+```
+
+
+## Workflow evaluation
+
+Because the true simulation parameters are known,
+`def_DEG()` can be used to determine the reference DEG status of each gene.
+This allows us to evaluate how well a DEG workflow ranks true DEGs ahead of non-DEGs.
+
+In this section, we use simulated count data to evaluate DEG detection performance
+using the area under the receiver operating characteristic curve, or AUC.
+An AUC of 0.5 indicates performance similar to random ranking,
+whereas values closer to 1 indicate that true DEGs are ranked more accurately.
+
+First, generate a simulated count dataset.
+
+```{r sim-eval-data}
+set.seed(1)
+
+x <- sim_gene_counts(n_genes = 20000, p_DEG = c(0.01, 0.04), fc_mean = c(4, 4))
+is_DEG <- def_DEG(x, fc = 4)
+
+table(is_DEG)
+```
+
+The following MA plot highlights the simulated true DEGs.
+
+```{r sim-eval-data-viz, echo=FALSE, include=TRUE}
+x_norm <- calc_nf(x)
+gene_colors <- ifelse(is_DEG, "#B24745", "#ADADAD")
+
+plot_ma(x_norm, col = gene_colors)
+```
+
+Next, define a helper function that calculates the AUC from gene-level p-values.
+Smaller p-values are converted to larger ranking scores
+so that genes with stronger statistical evidence are ranked first.
+
+```{r sim-eval-auc-helper}
+library(pROC)
+
+calc_auc <- function(is_deg, p_value) {
+    p_value[is.na(p_value)] <- 1
+    ranking_score <- -p_value
+    roc_obj <- roc(is_deg, ranking_score)
+    auc_value <- auc(roc_obj)
+    as.numeric(auc_value)
+}
+```
+
+
+### Comparison with edgeR
+
+This subsection uses simulated counts to compare a standard `r pkg("edgeR", "bioc")`
+workflow with a DEGES-based normalization workflow followed by `r pkg("edgeR", "bioc")`
+DEG testing.
+
+First, run TMM normalization and a quasi-likelihood test with `r pkg("edgeR", "bioc")`,
+then compute the AUC.
+
+```{r sim-eval-edger-edger}
+library(edgeR)
+
+design <- model.matrix(~ group, data = x@exp_design)
+d1 <- DGEList(counts = x@data, group = x@exp_design$group)
+d1 <- calcNormFactors(d1)
+d1 <- estimateDisp(d1, design)
+fit1 <- glmQLFit(d1, design)
+qlf1 <- glmQLFTest(fit1, coef = 2)
+edger_output1 <- topTags(qlf1, n = nrow(d1$counts), sort.by = "none")$table
+
+calc_auc(is_DEG, edger_output1$PValue)
+```
+
+Next, estimate normalization factors with the DEGES approach using `calc_nf()`.
+The result is converted to a `r pkg("edgeR", "bioc")` object for the downstream DEG test,
+and AUC is computed from the resulting p-values.
+
+```{r sim-eval-edger-deges}
+x <- calc_nf(x, orm_func = norm_tmm, test_func = test_edger)
+
+design <- model.matrix(~ group, data = x@exp_design)
+d2 <- as_DGEList(x)
+d2 <- estimateDisp(d2, design)
+fit2 <- glmQLFit(d2, design)
+qlf2 <- glmQLFTest(fit2, coef = 2)
+edger_output2 <- topTags(qlf2, n = nrow(d2$counts), sort.by = "none")$table
+
+calc_auc(is_DEG, edger_output2$PValue)
+```
+
+
+### Comparison with DESeq2
+
+`r pkg("DESeq2", "bioc")` workflows can be evaluated in the same way.
+In `r pkg("normpatch")`, the built-in `test_deseq2()` function uses an LRT
+for DEG screening during DEGES-based normalization.
+Here, four workflows are compared:
+
+1. RLE normalization, followed by a `r pkg("DESeq2", "bioc")` Wald test.
+2. RLE normalization, followed by a `r pkg("DESeq2", "bioc")` LRT.
+3. DEGES using RLE normalization and `r pkg("DESeq2", "bioc")` Wald screening, followed by a `r pkg("DESeq2", "bioc")` Wald test.
+4. DEGES using RLE normalization and `r pkg("DESeq2", "bioc")` LRT screening, followed by a `r pkg("DESeq2", "bioc")` LRT.
+
+
+First, run the `r pkg("DESeq2", "bioc")` Wald test and compute AUC.
+
+```{r sim-eval-deseq2-Wald}
+library(DESeq2)
+
+col_data <- x@exp_design
+rownames(col_data) <- colnames(x@data)
+design = ~ group
+
+dds1 <- DESeqDataSetFromMatrix(countData = x@data, colData = col_data, design = design)
+dds1 <- estimateSizeFactors(dds1)
+dds1 <- estimateDispersions(dds1)
+dds1 <- nbinomWaldTest(dds1)
+deseq2_output_1 = as.data.frame(results(dds1))
+
+calc_auc(is_DEG, deseq2_output_1$pvalue)
+```
+
+Using the same input data, run `r pkg("DESeq2", "bioc")` with an LRT.
+
+```{r sim-eval-deseq2-LRT}
+dds2 <- DESeqDataSetFromMatrix(countData = x@data, colData = col_data, design = design)
+dds2 <- estimateSizeFactors(dds2)
+dds2 <- estimateDispersions(dds2)
+dds2 <- nbinomLRT(dds2, full = ~ group, reduced = ~ 1)
+deseq2_output_2 = as.data.frame(results(dds2))
+
+calc_auc(is_DEG, deseq2_output_2$pvalue)
+```
+
+Next, evaluate a DEGES workflow that uses a Wald test during DEG screening.
+Because `r pkg("normpatch")` does not provide a built-in Wald screening function for `calc_nf()`,
+the example first defines `test_deseq2_wald()`.
+
+```{r sim-eval-deseq2-wald-deges}
+test_deseq2_wald <- function(x, exp_design, nf = NULL, ...) {
+    if (is.null(nf)) nf <- rep(1, ncol(x))
+
+    x <- as.matrix(x)
+    exp_design <- as.data.frame(exp_design)
+    rownames(exp_design) <- colnames(x)
+
+    effective_lib_sizes <- nf * colSums(x)
+
+    dds <- DESeqDataSetFromMatrix(
+        countData = x,
+        colData = exp_design,
+        design = ~ group
+    )
+    sizeFactors(dds) <- effective_lib_sizes / mean(effective_lib_sizes)
+    dds <- estimateDispersions(dds)
+    dds <- nbinomWaldTest(dds)
+
+    test_output <- as.data.frame(results(dds))
+    p <- test_output$pvalue
+    p[is.na(p)] <- 1
+    q <- stats::p.adjust(p, method = "BH")
+
+    data.frame(
+        p_value = p,
+        q_value = q,
+        row.names = NULL,
+        check.names = FALSE
+    )
+}
+
+
+x3 <- calc_nf(x, norm_func = norm_rle, test_func = test_deseq2_wald)
+dds3 <- as_DESeqDataSet(x3)
+dds3 <- estimateDispersions(dds3)
+dds3 <- nbinomWaldTest(dds3)
+deseq2_output_3 = as.data.frame(results(dds3))
+
+calc_auc(is_DEG, deseq2_output_3$pvalue)
+```
+
+Finally, evaluate the DEGES workflow that uses the `r pkg("DESeq2", "bioc")`
+LRT for DEG screening.
+
+```{r sim-eval-deseq2-lrt-deges}
+x4 <- calc_nf(x, norm_func = norm_rle, test_func = test_deseq2)
+dds4 <- as_DESeqDataSet(x4)
+dds4 <- estimateDispersions(dds4)
+dds4 <- nbinomLRT(dds4, full = ~ group, reduced = ~ 1)
+deseq2_output_4 = as.data.frame(results(dds4))
+
+calc_auc(is_DEG, deseq2_output_4$pvalue)
+```
+
+The AUC values can then be summarized across the four workflows.
+
+
+```{r sim-eval-deseq2-output-summary}
+data.frame(
+    pipeline = c("RLE + Wald", "RLE + LRT", "DEGES(Wald) + Wald", "DEGES(LRT) + LRT"),
+    auc = c(
+        calc_auc(is_DEG, deseq2_output_1$pvalue),
+        calc_auc(is_DEG, deseq2_output_2$pvalue),
+        calc_auc(is_DEG, deseq2_output_3$pvalue),
+        calc_auc(is_DEG, deseq2_output_4$pvalue)
+    )
+)
+```

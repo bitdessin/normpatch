@@ -1,0 +1,32 @@
+---
+title: "normpatch"
+site: bookdown::bookdown_site
+documentclass: book
+output: bookdown::gitbook
+bibliography: ["references.bib"]
+csl: "springer-basic-author-date.csl"
+---
+
+# normpatch {-}
+
+*Patch the bias. Keep the biology.*
+
+
+`r pkg("normpatch")` is an R package for estimating normalization factors from bulk RNA-seq count data.
+It implements methods based on the DEGES framework,
+the DEG elimination strategy,
+which iteratively reduces the influence of DEGs
+when estimating sample-specific scaling factors [@TbT; @TCC].
+The framework is intended for datasets affected by compositional imbalance
+or strongly asymmetric DEG patterns,
+where standard normalization assumptions may not hold.
+
+`r pkg("normpatch")` is a lightweight successor to the normalization components of the
+`r pkg("TCC", "bioc")` package [@TCC].
+Whereas `r pkg("TCC", "bioc")` provides an integrated workflow
+for normalization and DEG analysis,
+`r pkg("normpatch")` focuses on normalization factor estimation
+and delegates downstream DEG testing to established tools
+such as `r pkg("edgeR", "bioc")` [@edgeRv4] and `r pkg("DESeq2", "bioc")` [@DESeq2].
+This narrower scope provides a smaller, more transparent,
+and more interoperable interface.

@@ -1,0 +1,269 @@
+# Advanced Usage
+
+This chapter shows advanced usage of `r pkg("normpatch")`,
+including how to define custom normalization and test functions for `calc_nf()`
+and how to pass additional parameters to the DEGES workflow.
+
+
+```{r advcs-setup, include=FALSE}
+source("_config.R")
+```
+
+
+## Custom normalization functions
+
+`r pkg("normpatch")` provides DEGES-based normalization workflows.
+The workflow requires both a normalization function and a DEG screening function.
+By default, `r pkg("normpatch")` uses normalization and test functions from widely used packages,
+`r pkg("edgeR", "bioc")` and `r pkg("DESeq2", "bioc")`.
+In addition to the provided functions,
+`r pkg("normpatch")` also supports custom functions.
+
+Here, we show an example of using a custom normalization function with `calc_nf()`.
+The normalization function should receive `x` as a count matrix
+and `exp_design` as an experimental design data frame,
+then return normalization factors.
+Following this rule, users can define their own normalization steps.
+
+Here, we implement upper-quartile normalization and pass it to `calc_nf()`.
+
+```{r advcs-uq-func-def}
+norm_uq <- function(x, exp_design, ...) {
+    x <- as.matrix(x)
+    keep <- rowSums(x > 0) > 0
+    x <- x[keep, , drop = FALSE]
+    uq <- apply(x, 2, quantile, probs = 0.75, names = FALSE)
+    nf <- uq / colSums(x)
+    nf <- nf / exp(mean(log(nf)))
+    nf
+}
+```
+
+In this example, we customize only the normalization function.
+The test function uses the default `r pkg("edgeR", "bioc")` quasi-likelihood test,
+so no custom test function is needed.
+
+After defining the function, load the required packages and prepare the data as in the basic workflow.
+
+```{r advcs-uq-framework, message=FALSE, warning=FALSE}
+library(edgeR)
+library(baySeq)
+library(normpatch)
+
+count_data <- read.table("data/ath.E-MTAB-4391.txt",
+                         header = TRUE, sep = "\t", row.names = 1)
+keep <- rowSums(edgeR::cpm(count_data) > 5) > (ncol(count_data) / 2)
+count_data <- as.matrix(count_data[keep, , drop = FALSE])
+
+group <- sapply(strsplit(colnames(count_data), "_"), "[", 1)
+exp_design <- data.frame(group = factor(group))
+
+x <- newSeqCountData(count_data, exp_design = exp_design)
+```
+
+Then run `calc_nf()` with the custom `norm_uq()` function specified
+through the `norm_func` argument.
+
+
+```{r advcs-uq-framework-calcnf, message=FALSE, warning=FALSE}
+x <- calc_nf(x, norm_func = norm_uq)
+x@meta$nf
+```
+
+The example above implements upper-quartile normalization
+to demonstrate how a custom normalization function can be integrated into `calc_nf()`.
+
+However, `r pkg("edgeR", "bioc")` can also perform upper-quartile normalization
+through `calcNormFactors()` by setting `method = "upperquartile"`.
+The workflow can therefore be changed from TMM to upper-quartile normalization as follows.
+Additional arguments supplied to `calc_nf()` are forwarded to the normalization function.
+In this example, `method = "upperquartile"` is passed to `calcNormFactors()`.
+
+```{r advcs-uq-framework-edgeR, message=FALSE, warning=FALSE}
+x <- newSeqCountData(count_data, exp_design = exp_design)
+x <- calc_nf(x, method="upperquartile")
+x@meta$nf
+```
+
+
+## Custom test functions
+
+TbT [@TbT] is the original DEGES-based normalization workflow.
+It estimates normalization factors using TMM and
+screens candidate DEGs with `r pkg("baySeq", "bioc")`.
+Because `r pkg("normpatch")` does not provide a built-in `r pkg("baySeq", "bioc")` screening function,
+this section shows how to define a custom test function that reproduces the TbT workflow.
+
+The test function should receive at least `x` as a count matrix,
+`exp_design` as a data frame of experimental design,
+and `nf` as normalization factors.
+It should return at least p-value (`p_value`) and q-value (`q_value`) columns in a data frame.
+Additional arguments can also be defined.
+For example, `r pkg("baySeq", "bioc")` requires
+`samplesize` for bootstrapping during the test
+and cluster information through `cl` for parallel computation.
+The custom function adds these arguments and sets their default values.
+
+
+```{r advcs-test-bayseq-def, results='hide', message=FALSE, warning=FALSE}
+library(baySeq)
+library(parallel)
+
+test_bayseq <- function(x, exp_design, nf, samplesize=10000, cl=NULL, ...) {
+    d <- new("countData",
+            data = x,
+            replicates = exp_design$group,
+            groups = list(NDE = rep(1, nrow(exp_design)), DE = exp_design$group),
+            libsizes = nf * colSums(x))
+    d@annotation <- data.frame(gene_id = 1:nrow(x))
+    d <- getPriors.NB(d, estimation = "QL", samplesize = samplesize, cl = cl)
+    d <- baySeq::getLikelihoods(d, pET = "BIC", cl = cl)
+    test_stats <- topCounts(d, group = "DE", number = nrow(x))
+    test_stats <- test_stats[order(test_stats$gene_id), ]
+    p <- test_stats$FWER.DE
+    q <- test_stats$FDR.DE
+    p[is.na(p)] <- 1
+    q[is.na(q)] <- 1
+    data.frame(
+        p_value = p,
+        q_value = q,
+        row.names = NULL, check.names = FALSE)
+}
+```
+
+For the normalization step, the built-in `norm_tmm()` function can be used directly.
+After defining the test function, load the data and run normalization.
+
+```{r advcs-tbt-framework, results='hide', message=FALSE, warning=FALSE}
+library(edgeR) # to use 'cpm' function
+library(normpatch)
+
+count_data <- read.table("data/ath.E-MTAB-4391.txt",
+                         header = TRUE, sep = "\t", row.names = 1)
+keep <- rowSums(cpm(count_data) > 5) > (ncol(count_data) / 2)
+count_data <- as.matrix(count_data[keep, , drop = FALSE])
+
+group <- sapply(strsplit(colnames(count_data), "_"), "[", 1)
+exp_design <- data.frame(group = factor(group))
+
+x <- newSeqCountData(count_data, exp_design = exp_design)
+
+if(require("parallel")) {
+    cl <- makeCluster(4)
+} else {
+    cl <- NULL
+}
+
+x <- calc_nf(x, norm_func = norm_tmm, test_func = test_bayseq,
+             iter = 1, samplesize = 100, cl = cl)
+
+if (!is.null(cl)) {
+    stopCluster(cl)
+}
+```
+
+Although `test_bayseq()` is primarily designed for use within `calc_nf()` during DEGES-based normalization,
+it also returns gene-level p-values and q-values.
+Therefore, it can also be used directly for DEG analysis.
+
+```{r advcs-tbt-framework-detection, results='hide', message=FALSE, warning=FALSE}
+if(require("parallel")) {
+    cl <- makeCluster(4)
+} else {
+    cl <- NULL
+}
+
+test_stats <- test_bayseq(x@data, x@exp_design, x@meta$nf, samplesize = 100, cl = cl)
+
+if (!is.null(cl)) {
+    stopCluster(cl)
+}
+
+test_stats <- data.frame(gene_name = x@gene_names, test_stats)
+```
+
+```{r advcs-tbt-output}
+head(test_stats)
+```
+
+Next, visualize the test results by highlighting genes with `q_value < 0.05`
+in the `r pkg("baySeq", "bioc")` results.
+
+```{r advcs-tbt-viz}
+is_deg <- test_stats$q_value < 0.05
+gene_colors <- ifelse(is_deg, "#B24745", "#ADADAD")
+plot_ma(x, col = gene_colors)
+```
+
+Here, `samplesize = 100` is used only for the example.
+In practical analyses, use a larger value such as 10,000.
+
+
+## GLM for multi-factor comparison
+
+For experiments with multiple experimental factors,
+the statistical model should be chosen to match the biological question.
+You can supply different models to screen candidate DEGs for specific effects during normalization.
+
+Here, we load and prepare a dataset for a multi-factor comparison.
+
+```{r advcs-mfc-soybean-load-data}
+atlas <- getAtlasData("E-GEOD-69469")
+se <- atlas[[1]]$rnaseq
+
+count_data <- as.matrix(assay(se, "counts"))
+keep <- rowSums(cpm(count_data) > 5) > ncol(count_data) / 2
+count_data <- count_data[keep, , drop = FALSE]
+count_data <- as.matrix(count_data)
+
+col_data <- as.data.frame(colData(se))
+exp_design <- data.frame(
+    group = factor(ifelse(grepl('control', col_data[, c("environmental_stress")]), 'control', 'stress')),
+    timepoint = factor(gsub("Zeitgeber time ", "", col_data[, c("sampling_time_point")])))
+
+x <- newSeqCountData(count_data, exp_design = exp_design)
+x
+```
+
+
+By default, `calc_nf()` screens candidate DEGs using the available experimental design.
+This can exclude genes associated with any modeled additive or interaction effects during DEGES-based normalization.
+
+```{r cs-mfc-soybean-calcnf-default}
+x <- calc_nf(x)
+x@meta$nf
+```
+
+In some analyses, the normalization step should screen candidate DEGs for a specific factor only.
+In that case, pass additional arguments to the test function used by `calc_nf()`.
+
+For example, using TMM normalization and a `r pkg("edgeR", "bioc")` quasi-likelihood test,
+the workflow below removes candidate DEGs for the treatment effect while adjusting for time point.
+
+```{r cs-mfc-soybean-calcnf-edgeR-treatment-1}
+design <- model.matrix(~ group + timepoint, data = exp_design)
+head(design)
+```
+
+After confirming that the second column of the design matrix represents the treatment effect,
+pass `design` and `coef = 2` to `calc_nf()`.
+
+```{r cs-mfc-soybean-calcnf-edgeR-treatment-2}
+x <- calc_nf(x, design = design, coef = 2)
+x@meta$nf
+```
+
+See the `r pkg("edgeR", "bioc")` documentation for more detailed guidance on model matrices,
+coefficients, and contrasts.
+
+`r pkg("DESeq2", "bioc")` uses a different testing interface.
+For an LRT, specify a full model and a reduced model.
+The test evaluates whether terms present only in the full model explain additional variation.
+For example, to test the treatment effect after adjusting for time point, use the following workflow.
+
+
+```{r cs-mfc-soybean-calcnf-DESeq2}
+x <- newSeqCountData(count_data, exp_design = exp_design)
+x <- calc_nf(x, norm_func = norm_rle, test_func = test_deseq2, full = ~ group + timepoint, reduced = ~ timepoint)
+x@meta$nf
+```
